@@ -22,7 +22,7 @@
 #endif
 
 #ifdef RADIX_SORT_64_BIT
-typedef long long mint;
+typedef long long mint; // machine int
 typedef unsigned long long umint;
 #else
 typedef int mint;
