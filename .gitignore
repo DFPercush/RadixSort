@@ -1,0 +1,5 @@
+.vs
+*.7z
+x64
+Release
+Debug
