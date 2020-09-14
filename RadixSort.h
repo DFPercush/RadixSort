@@ -1,17 +1,10 @@
 
 
 
-#ifdef RADIX_SORT_TESTING
-#include <iostream>
-#include <fstream>
-#ifdef _WIN32
-#include <Windows.h>
-#endif
-#endif
 
 #include <string>
 #include <stdexcept>
-
+#include <algorithm>
 
 #if defined(__GNUC__)
 #if defined(_LP64) || defined(__LP64__)
@@ -39,12 +32,46 @@ class GetSizeString { public: int operator()(std::string s) { return (int)s.size
 // Note: Indexer classes must accept indeces greater than length of item and return a valid byte, usually 0 in such a case.
 template <typename T>
 class IndexInt { public: unsigned char operator()(T x, int i) { return (x >> ((sizeof(T) - i - 1) << 3)) & 0xFF; }};
+
+//class IndexFloat { public: unsigned char operator()(float x, int i) { return ((*(int*)(&x)) >> ((sizeof(float) - i - 1) << 3)) & 0xFF; }};
+union EndianTestUnion
+{
+	//EndianTestUnion(): s{0xFF00} {} // {s = (unsigned short)0xFF00;}
+	unsigned short s;
+	char c;
+};
+constexpr EndianTestUnion etu{(unsigned short)0xFF00};
+constexpr bool isLittleEndian() { return etu.c == 0; }
+
+class IndexFloat
+{
+public:
+	unsigned char operator()(float x, int i)
+	{
+		if (isLittleEndian()) { return ((unsigned char*)(&x))[sizeof(float) - i - 1]; }
+		else { return ((unsigned char*)(&x))[i]; }
+	}
+};
+class IndexDouble
+{
+public:
+	unsigned char operator()(double x, int i)
+	{
+		if (isLittleEndian()) { return ((unsigned char*)(&x))[sizeof(double) - i - 1]; }
+		else { return ((unsigned char*)(&x))[i]; }
+	}
+};
+
+//class IndexDouble { public: unsigned char operator()(double x, int i) { return ((*(int64_t*)(&x)) >> ((sizeof(float) - i - 1) << 3)) & 0xFF; }};
+
+template<typename T>
+class IndexIntrinsic { public: unsigned char operator()(T x, int i) { return (x >> ((sizeof(T) - i - 1) << 3)) & 0xFF; }};
 class IndexString{ public: unsigned char operator()(std::string s, int i){ return (i < s.size()) ? s[i] : 0; } };
 
 
 //####################################################################################################
 // Main radix sort class
-template <typename T, class IndexerMSB0 = IndexInt<T>, class GetSize = GetSizeIntrinsic<T>>
+template <typename T, class IndexerMSB0 = IndexIntrinsic<T>, class GetSize = GetSizeIntrinsic<T>>
 class Sorter
 {
 public:
@@ -55,13 +82,24 @@ private:
 	IndexerMSB0 getByte;
 	GetSize getSize;
 	int maxSize;
+	bool negativeOverride;
 
-public:
-	Sorter() 
+	void init()
 	{
 		allocSize = 0;
 		maxSize = 0;
 		A = B = nullptr;
+		negativeOverride = false;
+	}
+
+public:
+	Sorter() 
+	{
+		init();
+	}
+	Sorter(signed int negative)
+	{
+		if (negative < 0) negativeOverride = true;
 	}
 	~Sorter() { free(); }
 	void preAlloc(size_t numElements)
@@ -148,7 +186,69 @@ private:
 			in = out;
 			out = tmp;
 			currentIndexBuffer = in;
+
 		} // for b
+
+
+		if (negativeOverride || std::is_signed<T>::value)
+		{
+			// Move negative numbers to the beginning of the array and reverse order
+			// At this point, they will be at the end, because sign bit is most significant
+			// First, binary search for start of negatives.
+
+			// Not searching for an exact element here, so I don't think this will work...
+			//std::binary_search(in, in + numElements, 
+
+			//size_t negStartMin = numElements >> 1;
+			//size_t negStartMax = numElements - 1;
+			size_t negStart = numElements >> 1;
+			size_t negDelta = numElements >> 2;
+			//while (negStartMax > negStartMin)
+			//while ((getByte(a[in[negStart]], 0) & 0x80) == 0 || (getByte(a[in[negStart - 1]], 0) & 0x80) != 0 || negStart == 0 || negStart >= numElements)
+			while ((negStart > 0) && (negStart < numElements) && !(
+			(getByte(a[in[negStart]], 0) & 0x80) != 0 && (getByte(a[in[negStart - 1]], 0) & 0x80) == 0  
+			))
+			{
+				//if (a[in[negStartMin]] < 0)
+				//if (a[in[negStart]] < 0)
+				//{
+				//	//if (negStartMin == numElements - 1 || a[in[negStartMin + 1]] >= 0)
+				//	if (negStart == numElements - 1 || a[in[negStart + 1]] >= 0)
+				//	{
+				//		negStart = negStartMin;
+				//		break;
+				//	}
+				//	negStart -= negDelta;
+				//}
+				//else if (a[in[negStartMin]] >= 0) {negStartMin += negDelta + 1;}
+				//else if (a[in[negStartMax]] < 0) {negStartMax += }
+
+				if (getByte(a[in[negStart]], 0) & 0x80) negStart -= negDelta;
+				else negStart += negDelta;
+				negDelta >>= 1;
+				if (negDelta < 1) negDelta = 1;
+			}
+			size_t negCount = numElements - negStart;
+			if (negStart < numElements)
+			{
+				memcpy(out, in + negStart, negCount * sizeof(size_t));
+				memmove(in + negCount, in, negStart * sizeof(size_t));
+				memcpy(in, out, negCount * sizeof(size_t));
+				if (std::is_floating_point<T>::value)
+				{
+					// Integer wrap-around/overflow of negative numbers preserves order here, but
+					// floating point types will be reversed, because the binary value is the same
+					// whether positive or negative, except the sign bit.
+					// Basically floats are backwards.
+					size_t negSwapLo = 0;
+					size_t negSwapHi = negCount - 1;
+					while (negSwapLo < negSwapHi) std::swap(in[negSwapLo++], in[negSwapHi--]);
+				}
+			}
+		} // if negatives
+
+
+
 	} // buildView()
 
 public:
@@ -200,238 +300,7 @@ public:
 		if (!keepMemoryResources) { free(); }
 	}
 
-}; // class RadixSorter
+}; // class Sorter
 
+} //namespace RadixSort
 
-#ifdef RADIX_SORT_TESTING
-
-namespace Testing
-{
-
-void printData(int* data, size_t count, int numbersPerLine)
-{
-	for (int i = 0; i < count; i++)
-	{
-		if (i > 0 && i % numbersPerLine == 0) { std::cout << std::endl; }
-		std::cout << data[i] << "  ";
-	}
-}
-
-void printStrings(std::string* astr, size_t count)
-{
-	for (int i = 0; i < count; i++)
-	{
-		std::cout << astr[i] << std::endl;
-	}
-}
-
-
-void clearLine()
-{
-#if defined(WIN32) || defined(_WIN32) || defined(_WINDOWS_)
-	static bool initialized = false;
-	if (!initialized)
-	{
-		// Set output mode to handle virtual terminal sequences
-		HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-		if (hOut == INVALID_HANDLE_VALUE)
-		{
-			return;
-		}
-
-		DWORD dwMode = 0;
-		if (!GetConsoleMode(hOut, &dwMode))
-		{
-			return;
-		}
-
-		dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
-		if (!SetConsoleMode(hOut, dwMode))
-		{
-			return;
-		}
-		initialized = true;
-		//return;
-	}
-	//printf("\033K");
-	printf("\x1b[K");
-	printf("\x1b[G");
-#else
-	printf("\033[2K\r");
-#endif
-} // clearLine()
-
-bool testInt(size_t testSize, int numTests, int testSeed, int minValue, int maxValue, bool doPrintData, int numbersPerLine = 10)
-{
-	//bool doPrintData = false;
-	//int testSeed = 1234;
-	//size_t testSize = 1000000000;
-	//int minValue = 10000;
-	//int maxValue = 99999;
-	//int numTests = 1;
-
-	//int numbersPerLine = 10;
-
-	IndexInt<int> mi;
-	int t0 = mi(127, 0);
-	int t1 = mi(127, 1);
-	int t2 = mi(127, 2);
-	int t3 = mi(127, 3);
-
-	int *testData = new int[testSize];
-	srand(testSeed);
-
-	bool *testResults = new bool[numTests];
-
-	std::cout << "size = " << testSize << std::endl;
-	std::cout << "seed = " << testSeed << std::endl;
-	std::cout << "minValue = " << minValue << std::endl;
-	std::cout << "maxValue = " << maxValue << std::endl;
-
-
-	if (!doPrintData) { std::cout << "\nProgress..."; std::cout.flush(); }
-	for (int iTest = 0; iTest < numTests; iTest++)
-	{
-		if (!doPrintData) { clearLine(); std::cout << "Iteration " << iTest << " / " << numTests; std::cout.flush(); }
-		for (int i = 0; i < testSize; i++)
-		{
-			testData[i] = minValue + (rand() % (maxValue - minValue));
-		}
-		if (doPrintData)
-		{
-			std::cout << "\nInput data:\n\n";
-			printData(testData, testSize, numbersPerLine);
-			std::cout << std::endl;
-		}
-
-		Sorter<int> rad;
-		rad.sort(testData, testSize);
-
-		if (doPrintData)
-		{
-			std::cout << "\nSorted data:\n\n";
-			printData(testData, testSize, numbersPerLine);
-			std::cout << std::endl;
-		}
-
-		bool good = true;
-		for (int i = 0; i < testSize - 1; i++)
-		{
-			if (testData[i + 1] < testData[i])
-			{
-				good = false;
-				break;
-			}
-		}
-		testResults[iTest] = good;
-		if (good && doPrintData) { std::cout << "\nOK\n"; }
-		else if (doPrintData) std::cout << "\nFail!\n";
-	} // for iTest
-
-	int nGood = 0;
-
-	std::cout << "\n=== SUMMARY ===\n";
-	for (int gi = 0; gi < numTests; gi++)
-	{
-		if (testResults[gi]) { nGood++; }
-		else
-		{
-			std::cout << "    Iteration " << gi << " failed!\n";
-		}
-	}
-	if (nGood == numTests) { std::cout << "All good! (" << numTests << " iterations.)\n"; }
-	else { std::cout << nGood << " / " << numTests << " passed.\n"; }
-	std::cout << "size = " << testSize << std::endl;
-	std::cout << "seed = " << testSeed << std::endl;
-	std::cout << "minValue = " << minValue << std::endl;
-	std::cout << "maxValue = " << maxValue << std::endl;
-	
-	delete [] testData;
-	return nGood == numTests;
-} // main()
-
-bool testStr(size_t testSize, int numTests, int testSeed, int maxStrLength, bool doPrintData)
-{
-	const char validChars[] = "123456789QWERTYUPADFGHJKLZXCVBNMqwertyupadfghjkzxcvbnm";
-	int validCharLen = strlen(validChars);
-
-	Sorter<std::string, IndexString, GetSizeString> rad;
-	std::string *testData = new std::string[testSize];
-
-	srand(testSeed);
-
-	bool* testResults = new bool[numTests];
-
-	std::cout << "size = " << testSize << std::endl;
-	std::cout << "seed = " << testSeed << std::endl;
-	std::cout << "maxStrLength = " << maxStrLength << std::endl;
-
-	if (!doPrintData) { std::cout << "\nProgress..."; std::cout.flush(); }
-	for (int iTest = 0; iTest < numTests; iTest++)
-	{
-		if (!doPrintData) { clearLine(); std::cout << "Iteration " << iTest << " / " << numTests; std::cout.flush(); }
-		for (int i = 0; i < testSize; i++)
-		{
-			int len = rand() % maxStrLength;
-			testData[i].clear();
-			for (int si = 0; si < len; si++)
-			{
-				testData[i] += validChars[rand() % validCharLen];
-			}
-		}
-		if (doPrintData)
-		{
-			std::cout << "\nInput data:\n\n";
-			printStrings(testData, testSize);
-			std::cout << std::endl;
-		}
-
-		rad.sort(testData, testSize);
-
-		if (doPrintData)
-		{
-			std::cout << "\nSorted data:\n\n";
-			printStrings(testData, testSize);
-			std::cout << std::endl;
-		}
-
-		bool good = true;
-		for (int i = 0; i < testSize - 1; i++)
-		{
-			if (testData[i + 1] < testData[i])
-			{
-				good = false;
-				break;
-			}
-		}
-		testResults[iTest] = good;
-		if (good && doPrintData) { std::cout << "\nOK\n"; }
-		else if (doPrintData) std::cout << "\nFail!\n";
-	} // for iTest
-
-	int nGood = 0;
-
-	std::cout << "\n=== SUMMARY ===\n";
-	for (int gi = 0; gi < numTests; gi++)
-	{
-		if (testResults[gi]) { nGood++; }
-		else
-		{
-			std::cout << "    Iteration " << gi << " failed!\n";
-		}
-	}
-	if (nGood == numTests) { std::cout << "All good! (" << numTests << " iterations.)\n"; }
-	else { std::cout << nGood << " / " << numTests << " passed.\n"; }
-	std::cout << "size = " << testSize << std::endl;
-	std::cout << "seed = " << testSeed << std::endl;
-	std::cout << "maxStrLength = " << maxStrLength << std::endl;
-
-	delete[] testData;
-	return nGood == numTests;
-}
-
-} // testing namespace
-
-#endif  // testing define
-
-}
