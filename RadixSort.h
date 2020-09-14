@@ -83,6 +83,7 @@ private:
 	GetSize getSize;
 	int maxSize;
 	bool negativeOverride;
+	bool floatOverride;
 
 	void init()
 	{
@@ -90,6 +91,7 @@ private:
 		maxSize = 0;
 		A = B = nullptr;
 		negativeOverride = false;
+		floatOverride = false;
 	}
 
 public:
@@ -99,7 +101,17 @@ public:
 	}
 	Sorter(signed int negative)
 	{
+		init();
 		if (negative < 0) negativeOverride = true;
+	}
+	Sorter(double negative)
+	{
+		init();
+		if (negative < 0)
+		{
+			negativeOverride = true;
+			floatOverride = true;
+		}
 	}
 	~Sorter() { free(); }
 	void preAlloc(size_t numElements)
@@ -234,7 +246,7 @@ private:
 				memcpy(out, in + negStart, negCount * sizeof(size_t));
 				memmove(in + negCount, in, negStart * sizeof(size_t));
 				memcpy(in, out, negCount * sizeof(size_t));
-				if (std::is_floating_point<T>::value)
+				if (floatOverride || std::is_floating_point<T>::value)
 				{
 					// Integer wrap-around/overflow of negative numbers preserves order here, but
 					// floating point types will be reversed, because the binary value is the same
