@@ -1,7 +1,4 @@
 
-
-
-
 #include <string>
 #include <stdexcept>
 #include <algorithm>
@@ -176,7 +173,16 @@ private:
 			memset(buckets, 0, 0x100 * sizeof(size_t));
 			for (i = 0; (size_t)i < numElements; i++)
 			{
-				buckets[getByte(a[in[i]], b)]++;
+				//buckets[getByte(a[in[i]], b)]++; 
+				// Let's break that down...
+				size_t in_i = in[i];
+				const auto& aini = a[in_i];
+				unsigned char byteVal = getByte(aini, b);
+				buckets[byteVal]++; // <-- Hot path. 
+				// Idk what else to do here. It's just memory access
+				// Keep buckets in cache
+				//volatile char tempReadCache; for (int chi = 0; chi < 0x100; chi += 0x40) { tempReadCache = (char)buckets[chi]; } tmpReadCache = (char)buckets[0xFF];
+				// ^ not helping
 			}
 			size_t cum = 0;
 			for (i = 0; i < 0x100; i++)
@@ -191,7 +197,7 @@ private:
 				if (buckets[iBucket] == 0) throw std::logic_error("Bug in radix sort: bucket underflow.");
 #endif
 				buckets[iBucket]--;
-				out[buckets[iBucket]] = in[i];
+				out[buckets[iBucket]] = in[i]; // Hot path
 			}
 
 			tmp = in;

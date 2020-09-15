@@ -1,5 +1,3 @@
-
-#define RADIX_SORT_TESTING
 #include <iostream>
 #include "RadixSort.h"
 #include "test.h"
@@ -22,7 +20,7 @@ void defaultTest()
 	testFloat(100000, 100, 1234, -999.9f, 999.9f, false);
 }
 
-void compareStdSort(int size, int seed, float minVal, float maxVal)
+void compareStdSort(size_t size, int seed, float minVal, float maxVal)
 {
 
 	cout << "Generating random data\n";
@@ -83,32 +81,51 @@ std::sort(dataStd, dataStd + size);
 	float radRate = size / radTime;
 	float stdTime = float(endStd.QuadPart - begStd.QuadPart) / pFreq.QuadPart;
 	float stdRate = size / stdTime;
-	cout << "Results:\n  Radix sort: " << size << " elements in " << radTime << " seconds = " << radRate << " el/s\n"
-		 << "std::sort(): " << size << " elements in " << stdTime << " seconds = " << stdRate << " el/s\n";
+	cout << "Results:\n   Radix sort: " << size << " elements in " << radTime << " seconds = " << radRate << " el/s\n"
+		 << "  std::sort(): " << size << " elements in " << stdTime << " seconds = " << stdRate << " el/s\n";
 
 }
 
 int main()
 {
-menu:
-	cout << "Menu\n 1. Default test.\n 2. Compare to std::sort\n 3. Manual test\n> ";
-	int option;
-	cin >> option;
-	switch (option)
+	int option = 0;
+	size_t size = 0;
+	//size_t numIterations;
+	int seed = 0;
+	float minVal = 0;
+	float maxVal = 0;
+	do
 	{
-		case 1:
-			defaultTest();
-			break;
-		case 2:
-			compareStdSort(1000000, 1234, -999.0f, 100.0f);
-			//compareStdSort(10000000);
-			break;
-		case 3:
-			cout << "No.\n";
-			Sleep(2000);
-			goto menu;
-			break;
-		default:
-			break;
-	}
+		cout << "Menu:\n 0. Exit\n 1. Default test.\n 2. Compare to std::sort\n 3. Manual test (float)\n 4. Repeat last manual test\n ...\n 9. Current dev test\n> ";
+
+		cin >> option;
+		switch (option)
+		{
+			case 0:
+				break;
+			case 1:
+				defaultTest();
+				break;
+			case 2:
+				compareStdSort(1000000, 1234, -999.0f, 100.0f);
+				//compareStdSort(10000000);
+				break;
+			case 3:
+				cout << "Data size: "; cin >> size;
+				cout << "Random seed: "; cin >> seed;
+				cout << "Minimum value: "; cin >> minVal;
+				cout << "Maximum value: "; cin >> maxVal;
+				compareStdSort(size, seed, minVal, maxVal);
+				break;
+			case 4:
+				compareStdSort(size, seed, minVal, maxVal);
+				break;
+			case 9:
+				compareStdSort(10000000, 11, -999, 999);
+				break;
+			default:
+				break;
+		}
+	} while (option != 0);
+	return 0;
 }
