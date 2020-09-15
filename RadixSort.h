@@ -3,6 +3,13 @@
 #include <stdexcept>
 #include <algorithm>
 
+#ifndef RADIX_SORT_NO_MMINTRIN // #define this if you get errors about _mm_prefetch or this header
+#include <mmintrin.h>
+#endif
+#define CACHE_LINE_SIZE 64
+
+
+#ifndef RADIX_SORT_32_BIT
 #if defined(__GNUC__)
 #if defined(_LP64) || defined(__LP64__)
 #define RADIX_SORT_64_BIT
@@ -10,10 +17,12 @@
 #elif defined(_WIN64)
 #define RADIX_SORT_64_BIT
 #endif
+#endif // RADIX_SORT_32_BIT
 
 #ifdef RADIX_SORT_64_BIT
 typedef long long mint; // machine int
 typedef unsigned long long umint;
+//extern "C" void PreserveCache64();
 #else
 typedef int mint;
 typedef unsigned int umint;
@@ -43,27 +52,32 @@ constexpr bool isLittleEndian() { return etu.c == 0; }
 class IndexFloat
 {
 public:
-	unsigned char operator()(float x, int i)
+	inline unsigned char operator()(float x, int i)
 	{
-		if (isLittleEndian()) { return ((unsigned char*)(&x))[sizeof(float) - i - 1]; }
-		else { return ((unsigned char*)(&x))[i]; }
+		// TODO: fast proper endianness
+		//if (isLittleEndian()) { return ((unsigned char*)(&x))[sizeof(float) - i - 1]; }
+		//else { return ((unsigned char*)(&x))[i]; }
+		// just assume little endian for now
+		return ((unsigned char*)(&x))[sizeof(float) - i - 1];
 	}
 };
 class IndexDouble
 {
 public:
-	unsigned char operator()(double x, int i)
+	inline unsigned char operator()(double x, int i)
 	{
-		if (isLittleEndian()) { return ((unsigned char*)(&x))[sizeof(double) - i - 1]; }
-		else { return ((unsigned char*)(&x))[i]; }
+		//if (isLittleEndian()) { return ((unsigned char*)(&x))[sizeof(double) - i - 1]; }
+		//else { return ((unsigned char*)(&x))[i]; }
+		return ((unsigned char*)(&x))[sizeof(double) - i - 1];
 	}
 };
 
 //class IndexDouble { public: unsigned char operator()(double x, int i) { return ((*(int64_t*)(&x)) >> ((sizeof(float) - i - 1) << 3)) & 0xFF; }};
 
+// TODO: Make Instrinsic a simple buffer indexer
 template<typename T>
-class IndexIntrinsic { public: unsigned char operator()(T x, int i) { return (x >> ((sizeof(T) - i - 1) << 3)) & 0xFF; }};
-class IndexString{ public: unsigned char operator()(std::string s, int i){ return (i < s.size()) ? s[i] : 0; } };
+class IndexIntrinsic { public: inline unsigned char operator()(const T& x, int i) { return (x >> ((sizeof(T) - i - 1) << 3)) & 0xFF; }};
+class IndexString{ public: inline unsigned char operator()(const std::string& s, int i){ return (i < s.size()) ? s[i] : 0; } };
 
 
 //####################################################################################################
@@ -176,13 +190,28 @@ private:
 				//buckets[getByte(a[in[i]], b)]++; 
 				// Let's break that down...
 				size_t in_i = in[i];
+				
 				const auto& aini = a[in_i];
-				unsigned char byteVal = getByte(aini, b);
-				buckets[byteVal]++; // <-- Hot path. 
-				// Idk what else to do here. It's just memory access
+				unsigned char byteVal = getByte(aini, b); // <-- Hot path
+				//const auto aval = a[in_i];
+				//unsigned char byteVal = getByte(aval, b); // <-- Hot path
+				// ^ That translates to 2 movss instructions. Not much to do about it at this point.
+				// This makes me think moving the original data around might be faster, since a[in[i]]
+				// causes the array to be accessed in a random order and constantly incur cache misses.
+				// Welp, that's a brick in the face.
+
+				buckets[byteVal]++;
+
 				// Keep buckets in cache
-				//volatile char tempReadCache; for (int chi = 0; chi < 0x100; chi += 0x40) { tempReadCache = (char)buckets[chi]; } tmpReadCache = (char)buckets[0xFF];
-				// ^ not helping
+#ifndef RADIX_SORT_NO_MMINTRIN
+				char* cacheStartAddr = (char*)&buckets[0];
+				char* cacheEndAddr = cacheStartAddr + sizeof(buckets) - 1;
+				for (char* cacheAddr = cacheStartAddr; cacheAddr < cacheEndAddr; cacheAddr += CACHE_LINE_SIZE)
+				{
+					::_mm_prefetch(cacheAddr, 1); // second arg of 1 means we'll need this again later
+				}
+				::_mm_prefetch(cacheEndAddr, 1);
+#endif
 			}
 			size_t cum = 0;
 			for (i = 0; i < 0x100; i++)

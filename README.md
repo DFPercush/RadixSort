@@ -1,3 +1,26 @@
+
+### Honesty...
+
+I reached an unfortunate conclusion today:  
+**The cache performance of this thing is terrible.**  
+And it's never going to be better without basically starting over. The entire working principle is just bad news for modern cpus.
+I thought I was onto something because I got good results in debug mode,
+but in release, this doesn't hold a candle to the performance of `std::sort()`, probably since a quick sort
+operates on partitions of localized elements which can stay in the cache longer. Internally, my implementation
+builds an array of indeces which refer to the original data, but never changes the order of the data itself
+until the end. So, it's constantly accessing random addresses, not scanning the data in order. In the output phase,
+that's unavoidable, because that's just how a radix sort works. But normally you scan the input data in order, and you only
+need to cache enough memory to hold the base number of counts. Two `movss` instructions are taking 50% of the cpu time,
+but even if I could eliminate that, this method is behind std::sort by a factor of 10, at least for very large data sets,
+which is where a radix sort is supposed to shine. So I guess I'm writing this off now as a research project - an interesting
+lesson in optimization. Despite all the theory in the world about linear time and number of array accesses, the cache on modern
+cpus is just sooo important.
+
+But, if you still want to use it, here is the project as-is. It technically works, it does sort things and is very flexible.
+It could still be useful for the view() function, which gives you a
+list of indeces without modifying the original data. But it's not as fast as actually sorting the data itself, in the cases where it really needs to be.
+It's probably ok for medium sized data sets that can fit in the L2 or L3 cache, but, you have been warned.
+
 # RadixSort
 
 A radix sort is a well known algorithm for sorting large amounts of data in linear time, i.e. `O(n)`. `*1`
