@@ -88,6 +88,7 @@ std::sort(dataStd, dataStd + size);
 
 int main()
 {
+	//testStr(10, 1, 11, 4, true);
 	int option = 0;
 	size_t size = 0;
 	//size_t numIterations;
@@ -96,7 +97,7 @@ int main()
 	float maxVal = 0;
 	do
 	{
-		cout << "Menu:\n 0. Exit\n 1. Default test.\n 2. Compare to std::sort\n 3. Manual test (float)\n 4. Repeat last manual test\n ...\n 9. Current dev test\n> ";
+		cout << "Menu:\n 0. Exit\n 1. Default test.\n 2. Compare to std::sort\n 3. Manual test (float)\n 4. Repeat last manual test\n 5. Unsigned int test\n ...\n 9. Current dev test\n> ";
 
 		cin >> option;
 		switch (option)
@@ -119,6 +120,9 @@ int main()
 				break;
 			case 4:
 				compareStdSort(size, seed, minVal, maxVal);
+				break;
+			case 5:
+				testInt(10, 1, 11, 1, 10, true);
 				break;
 			case 9:
 				compareStdSort(10000000, 11, -999, 999);

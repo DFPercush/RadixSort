@@ -72,12 +72,41 @@ public:
 	}
 };
 
-//class IndexDouble { public: unsigned char operator()(double x, int i) { return ((*(int64_t*)(&x)) >> ((sizeof(float) - i - 1) << 3)) & 0xFF; }};
-
-// TODO: Make Instrinsic a simple buffer indexer
 template<typename T>
 class IndexIntrinsic { public: inline unsigned char operator()(const T& x, int i) { return (x >> ((sizeof(T) - i - 1) << 3)) & 0xFF; }};
 class IndexString{ public: inline unsigned char operator()(const std::string& s, int i){ return (i < s.size()) ? s[i] : 0; } };
+
+// Pair prefabs
+template <typename T = int> struct GetSizeIntPair { constexpr size_t operator(T x)() { return sizeof(T); } };
+struct GetSizeFloatPair { constexpr size_t operator()(const std::pair<float, size_t>& x) { return sizeof(float); } };
+struct GetSizeDoublePair { constexpr size_t operator()(const std::pair<double, size_t>& x) { return sizeof(double); } };
+struct GetSizeStringPair { inline size_t operator()(const std::pair<std::string, size_t>& x) { return x.first.size(); } };
+template <typename T = int> struct IndexIntPair
+{
+	IndexInt<T> ind;
+	inline unsigned char operator()(std::pair<T, size_t> p, int byte)
+	{
+		static_assert(std::is_integral<T>::value, "Template argument to IndexIntPair must be an integer type");
+		return ind(p.first, byte);
+	}
+};
+struct IndexFloatPair
+{
+	IndexFloat ind;
+	inline unsigned char operator()(std::pair<float, size_t> p, int byte) { return ind(p.first, byte); }
+};
+struct IndexDoublePair
+{
+	IndexDouble ind;
+	inline unsigned char operator()(std::pair<double, size_t> p, int byte) { return ind(p.first, byte); }
+};
+struct IndexStringPair
+{
+	IndexString ind;
+	inline unsigned char operator()(const std::pair<std::string, size_t>& x, int i) { return x.first[i]; }
+};
+
+
 
 
 //####################################################################################################
@@ -88,8 +117,10 @@ class Sorter
 public:
 
 private:
-	size_t *A, *B, *currentIndexBuffer;
-	size_t allocSize;
+	size_t *A, *B, *currentIndexBuffer; // for view()
+	size_t allocSizeA, allocSizeB;
+	T* sortBuf; // for sort()
+	size_t sortBufSize;
 	IndexerMSB0 getByte;
 	GetSize getSize;
 	int maxSize;
@@ -98,9 +129,11 @@ private:
 
 	void init()
 	{
-		allocSize = 0;
+		allocSizeB = 0;
 		maxSize = 0;
 		A = B = nullptr;
+		sortBuf = nullptr;
+		sortBufSize = 0;
 		negativeOverride = false;
 		floatOverride = false;
 	}
@@ -125,7 +158,7 @@ public:
 		}
 	}
 	~Sorter() { free(); }
-	void preAlloc(size_t numElements)
+	void preAllocView(size_t numElements)
 	{
 		if (A) delete [] A;
 		if (B) delete[] B;
@@ -134,32 +167,55 @@ public:
 		//A = new IndexValuePair[numElements];
 		A = new size_t[numElements];
 		B = new size_t[numElements];
-		allocSize = numElements;
+		allocSizeB = numElements;
 	}
 
 	void free()
 	{
 		if (A) delete [] A;
 		A = nullptr;
+		allocSizeA = 0;
+		
 		if (B) delete [] B;
 		B = nullptr;
+		allocSizeB = 0;
+
+		if (sortBuf) delete[] sortBuf;
+		sortBuf = nullptr;
+		sortBufSize = 0;
+
 		currentIndexBuffer = nullptr;
-		allocSize = 0;
 	}
 
-	void growAlloc(size_t numElements)
+	void growAllocView(size_t numElements)
 	{
 		size_t newSize = 0;
-		if (allocSize < numElements)
+		size_t minSize = std::min(allocSizeA, allocSizeB);
+		if (minSize < numElements)
 		{
-			if (allocSize * 2 > numElements && allocSize < 1000000000) newSize = allocSize * 2;
+			if (minSize * 2 > numElements && minSize < 1000000000) newSize = minSize * 2;
 			else newSize = numElements;
 			free();
 			//ivpA = new IndexValuePair[newSize];
 			//ivpB = new IndexValuePair[newSize];
 			A = new size_t[newSize];
 			B = new size_t[newSize];
-			allocSize = newSize;
+			allocSizeB = allocSizeA = newSize;
+		}
+	}
+
+	void growAllocSort(size_t numElements)
+	{
+		size_t newSize = 0;
+		if (sortBufSize < numElements)
+		{
+			if (sortBufSize * 2 > numElements && sortBufSize < 1000000000) newSize = sortBufSize * 2;
+			else newSize = numElements;
+			if (sortBuf != nullptr) delete[] sortBuf;
+			//ivpA = new IndexValuePair[newSize];
+			//ivpB = new IndexValuePair[newSize];
+			sortBuf = new T[newSize];
+			sortBufSize = newSize;
 		}
 	}
 
@@ -167,7 +223,7 @@ private:
 	void buildView(const T* a, size_t numElements)
 	{
 		//size_t i = 0;
-		growAlloc(numElements);
+		growAllocView(numElements);
 
 		maxSize = 0;
 		size_t *tmp, *in, *out;
@@ -299,8 +355,12 @@ private:
 	} // buildView()
 
 public:
-	void sort(T* a, size_t numElements, bool keepMemoryResources = false)
+	void sort_old(T* a, size_t numElements, bool keepMemoryResources = false)
 	{
+		sortDirect(a, numElements, keepMemoryResources);
+		return; 
+
+
 		buildView(a, numElements);
 		size_t* in = currentIndexBuffer;
 		size_t* out = nullptr;
@@ -347,7 +407,155 @@ public:
 		if (!keepMemoryResources) { free(); }
 	}
 
+	static void mv(T* dest, T* src, size_t count)
+	{
+		if (std::is_class<T>::value)
+		{
+			size_t i;
+			if (dest < src) { for (i = 0; i < count; i++) dest[i  ] = std::move(src[i  ]); }
+			else            { for (i = count; i > 0; i--) dest[i-1] = std::move(src[i-1]); }
+		}
+		else
+		{
+			memmove(dest, src, count * sizeof(T));
+		}
+	}
+
+	void sort(T* data, size_t numElements, bool keepMemoryResources = false) //, M T::* value, bool hasNegative)
+	{
+		// TODO: observe the resource management options but we only need one buffer here 
+		
+		growAllocSort(numElements);
+		T* src = data;
+		T* dest = sortBuf; //new T[numElements];
+		size_t buckets[0x100];
+		int iByte; // sizeof(T);
+		//size_t maxSize = 0;
+		for (int i = 0; (size_t)i < numElements; i++)
+		{
+			int sz = getSize(data[i]);
+			if (sz > maxSize) maxSize = sz;
+		}
+
+
+ 		iByte = maxSize;
+		while (iByte > 0)
+		{
+			iByte--;
+			memset(buckets, 0, sizeof(buckets));
+			size_t iData = 0;
+			for (size_t iData = 0; iData < numElements; iData++)
+			{
+				//buckets[(getByte(src[iData], iByte) >> (iByte << 3)) & 0xFF] ++;
+				buckets[getByte(src[iData], iByte)] ++;
+			}
+			size_t cum = 0; // cumulative total
+			for (int iBucket = 0; iBucket < 0x100; iBucket++)
+			{
+				cum += buckets[iBucket];
+				buckets[iBucket] = cum;
+
+			}
+
+			iData = numElements;
+			while (iData > 0)
+			{
+				iData--;
+				dest[--buckets[getByte(src[iData], iByte)]] = src[iData];
+
+#ifndef RADIX_SORT_NO_MMINTRIN
+				// If this block is giving you errors, it can be safely commented out.
+				// This is an optimization to keep certain things in cache.
+				if ((iData % (0x8000 / sizeof(T))) == 0)
+				{
+					char* cacheStartAddr = (char*)&buckets[0];
+					char* cacheEndAddr = cacheStartAddr + sizeof(buckets) - 1;
+					for (char* cacheAddr = cacheStartAddr; cacheAddr < cacheEndAddr; cacheAddr += CACHE_LINE_SIZE)
+					{
+						::_mm_prefetch(cacheAddr, 1); // second arg of 1 means we'll need this again later
+					}
+					::_mm_prefetch(cacheEndAddr, 1);
+				}
+#endif
+
+			}
+			std::swap(src, dest);
+		} // iByte
+
+
+		if (negativeOverride || std::is_signed<T>::value)
+		{
+			// Move negative numbers to the beginning of the array and reverse order
+			// At this point, they will be at the end, because sign bit is most significant
+			// First, binary search for start of negatives.
+
+			size_t negStart = numElements >> 1;
+			size_t negDelta = numElements >> 2;
+			while ((negStart > 0) && (negStart < numElements) && !(
+				(getByte(src[negStart], 0) & 0x80) != 0 && (getByte(src[negStart - 1], 0) & 0x80) == 0
+				))
+			{
+				if (getByte(src[negStart], 0) & 0x80) negStart -= negDelta;
+				else negStart += negDelta;
+				negDelta >>= 1;
+				if (negDelta < 1) negDelta = 1;
+			}
+			size_t negCount = numElements - negStart;
+			if (negStart < numElements)
+			{
+				//memcpy(dest, src + negStart, negCount * sizeof(T));
+				//memmove(src + negCount, src, negStart * sizeof(T));
+				//memcpy(src, dest, negCount * sizeof(T));
+
+				mv(dest, src + negStart, negCount);
+				mv(src + negCount, src, negStart);
+				mv(src, dest, negCount);
+
+				//std::swap(src, dest);
+				if (floatOverride || std::is_floating_point<T>::value)
+				{
+					// Integer wrap-around/overflow of negative numbers preserves order here, but
+					// floating point types will be reversed, because the binary value is the same
+					// whether positive or negative, except the sign bit.
+					// Basically floats are backwards.
+					size_t negSwapLo = 0;
+					size_t negSwapHi = negCount - 1;
+					while (negSwapLo < negSwapHi) std::swap(src[negSwapLo++], src[negSwapHi--]);
+				}
+			}
+		} // if negatives
+
+
+		if (data == src)
+		{
+			//delete [] dest;
+		}
+		else if (data == dest)
+		{
+			//memcpy(data, src, numElements * sizeof(T));
+			mv(data, src, numElements);
+			//delete [] src;
+		}
+		else throw std::logic_error("Unknown buffer");
+		if (!keepMemoryResources) { free(); }
+	} // sortDirect()
+
+
 }; // class Sorter
+
+
+//template <class T, typename M>
+
+
+typedef Sorter<int> IntSorter;
+typedef Sorter<float, IndexFloat> FloatSorter;
+typedef Sorter<double, IndexDouble> DoubleSorter;
+typedef Sorter<std::string, IndexString, GetSizeString> StringSorter;
+
+typedef Sorter<std::pair<int, size_t>, IndexIntPair<int>, GetSizeIntPair<int>> IntPairSorter;
+typedef Sorter<std::pair<float, size_t>, IndexFloatPair, GetSizeFloatPair> FloatPairSorter;
+typedef Sorter<std::pair<double, size_t>, IndexDoublePair, GetSizeDoublePair> DoublePairSorter;
+typedef Sorter<std::pair<std::string, size_t>, IndexStringPair, GetSizeStringPair> StringPairSorter;
 
 } //namespace RadixSort
 
